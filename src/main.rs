@@ -184,8 +184,8 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
             virtual_addr: 0x0000_0000,  // TODO: ?
             physical_addr: 0x0000_0000, // TODO: ?
             file_size: ss,
-            // TODO: should be smaller?!
-            memory_size: ss,
+            // TODO: ?!
+            memory_size: ss - 0x0004_a172,
             flags: (1 << 2),
             align: 4,
         };

@@ -72,9 +72,33 @@ struct Elf {
     section_header_index_entry: u16,
 }
 
-const AOUT_HEADER_SIZE: usize = 32;
+#[derive(FromBytes, Immutable, IntoBytes, Clone, Copy, Debug)]
+#[repr(C, packed)]
+struct ElfProgramHeader {
+    program_type: u32,
+    offset: u32,
+    virtual_addr: u32,
+    physical_addr: u32,
+    file_size: u32,
+    memory_size: u32,
+    flags: u32,
+    align: u32,
+}
 
-const ELF_HEADER_SIZE: u32 = std::mem::size_of::<Elf>() as u32;
+const AOUT_HEADER_SIZE: usize = std::mem::size_of::<Aout>();
+
+const ELF_HEADER_SIZE: usize = std::mem::size_of::<Elf>();
+
+const ELF_PROGRAM_HEADER_SIZE: usize = std::mem::size_of::<ElfProgramHeader>();
+
+// https://www.gnu.org/software/grub/manual/multiboot/multiboot.html
+const MULTIBOOT_HEADER_SIZE: usize = 0x48;
+
+// TODO: Multiboot struct
+
+const PAD_BASIC_SIZE: usize = 4;
+const PAD_EXTRA_SIZE: usize = 8;
+const PAD_SIZE: usize = PAD_BASIC_SIZE + PAD_EXTRA_SIZE;
 
 fn aout_mach_to_elf(aout: &Aout) -> u16 {
     let m = aout.magic;
@@ -84,6 +108,11 @@ fn aout_mach_to_elf(aout: &Aout) -> u16 {
     }
 }
 
+fn align_4k(v: u32) -> u32 {
+    ((v - 1) / 4096 + 1) * 4096
+}
+
+// TODO: Something with the memory sizes is strange.
 fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
     if let Ok((aout, _)) = Aout::read_from_prefix(d) {
         let elf = Elf {
@@ -98,21 +127,77 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
             machine: aout_mach_to_elf(&aout),
             version: 1,
             entry: aout.entry_point.into(),
-            program_header_offset: ELF_HEADER_SIZE,
+            program_header_offset: ELF_HEADER_SIZE as u32,
             section_header_offset: 0x00,
             flags: 0x00,
             elf_header_size: ELF_HEADER_SIZE as u16,
-            program_header_entry_size: 32,
+            program_header_entry_size: ELF_PROGRAM_HEADER_SIZE as u16,
             program_header_entry_count: 3,
             section_header_entry_size: 0,
             section_header_entry_count: 0,
             section_header_index_entry: 0,
         };
-        let b = elf.as_bytes().to_vec();
+        let eb = elf.as_bytes().to_vec();
 
-        let data = &d[AOUT_HEADER_SIZE..];
+        let ts: u32 = aout.text_size.into();
+        let ds: u32 = aout.data_size.into();
+        let ss: u32 = aout.symbol_table_size.into();
 
-        Ok([&b, data].concat())
+        let virtual_base = 0x8000_0000;
+        let text_base = 0x0011_0000;
+        let data_base = text_base + align_4k(ts);
+
+        // text section
+        let offset = (ELF_HEADER_SIZE + 3 * ELF_PROGRAM_HEADER_SIZE + PAD_SIZE) as u32;
+        let p_text = ElfProgramHeader {
+            program_type: 1,
+            offset,
+            virtual_addr: virtual_base + text_base,
+            physical_addr: text_base,
+            file_size: ts,
+            memory_size: ts,
+            flags: (1 << 2) | 1,
+            align: 4 * 1024,
+        };
+        let p_text_b = p_text.as_bytes().to_vec();
+
+        // data section
+        let offset = offset + ts;
+        let p_data = ElfProgramHeader {
+            program_type: 1,
+            offset,
+            virtual_addr: virtual_base + data_base,
+            physical_addr: data_base,
+            file_size: ds,
+            // TODO: taken from fixture; why??
+            memory_size: ds + 0x0007_47e8,
+            flags: (1 << 2) | (1 << 1),
+            align: 4 * 1024,
+        };
+        let p_data_b = p_data.as_bytes().to_vec();
+
+        // symbol table
+        let offset = offset + ds;
+        let p_st = ElfProgramHeader {
+            program_type: 0,
+            offset,
+            virtual_addr: 0x0000_0000,  // TODO: ?
+            physical_addr: 0x0000_0000, // TODO: ?
+            file_size: ss,
+            // TODO: should be smaller?!
+            memory_size: ss,
+            flags: (1 << 2),
+            align: 4,
+        };
+        let p_st_b = p_st.as_bytes().to_vec();
+
+        let pad = vec![0u8; PAD_SIZE];
+
+        let data = &d[AOUT_HEADER_SIZE + PAD_EXTRA_SIZE..];
+
+        // TODO: parse Multiboot header, starting with magic 0x1BAD_B002
+
+        Ok([&eb, &p_text_b, &p_data_b, &p_st_b, &pad, data].concat())
     } else {
         Err("Could not parse a.out".to_string())
     }

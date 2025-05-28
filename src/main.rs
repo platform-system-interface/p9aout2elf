@@ -71,6 +71,11 @@ fn main() -> std::io::Result<()> {
             println!("File: {file_name}");
             let d = fs::read(file_name).unwrap();
 
+            if let Ok(goblin::Object::Elf(elf)) = goblin::Object::parse(&d) {
+                println!("elf: {:#?}", &elf);
+                return Ok(());
+            }
+
             if let Ok((aout, _)) = Aout::read_from_prefix(&d) {
                 let arch = match aout.magic {
                     0x978a_0000 => "amd64",

@@ -1,0 +1,11 @@
+[package]
+name = "p9aout2elf"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.38", features = ["derive"] }
+env_logger = "0.11.8"
+log = "0.4.27"
+zerocopy = "0.8.25"
+zerocopy-derive = "0.8.25"

@@ -107,11 +107,59 @@ struct ElfProgramHeader {
     align: u32,
 }
 
+// https://gist.github.com/DhavalKapil/2243db1b732b211d0c16fd5d9140ab0b
+#[derive(Immutable, IntoBytes, Clone, Copy, Debug)]
+#[repr(u32)]
+enum ElfSectionType {
+    Null,
+    ProgBits,
+    SymbolTable,
+    SymbolStringTable,
+    RelocationEntriesWithAddends,
+    SymbolHashTable,
+    // TODO
+}
+
+#[derive(Immutable, IntoBytes, Clone, Copy, Debug)]
+#[repr(C, packed)]
+struct ElfSectionHeader {
+    name: u32,
+    section_type: ElfSectionType,
+    flags: u32,
+    addr: u32,
+    offset: u32,
+    size: u32,
+    link: u32,
+    info: u32,
+    addr_align: u32,
+    entry_size: u32,
+}
+
+#[derive(Immutable, IntoBytes, Clone, Copy, Debug)]
+#[repr(C, packed)]
+struct ElfSymbolTableEntry {
+    name: u32,
+    value: u32,
+    size: u32,
+    info: u8,
+    other: u8,
+    index: u16,
+}
+
+// https://refspecs.linuxbase.org/elf/gabi4+/ch4.symtab.html
+struct ElfSymbol {
+    // x
+}
+
 const AOUT_HEADER_SIZE: usize = std::mem::size_of::<Aout>();
 
 const ELF_HEADER_SIZE: usize = std::mem::size_of::<ElfHeader>();
 
 const ELF_PROGRAM_HEADER_SIZE: usize = std::mem::size_of::<ElfProgramHeader>();
+
+const ELF_SECTION_HEADER_SIZE: usize = std::mem::size_of::<ElfSectionHeader>();
+
+const ELF_SYMBOL_TABLE_ENTRY_SIZE: usize = std::mem::size_of::<ElfSymbolTableEntry>();
 
 // https://www.gnu.org/software/grub/manual/multiboot/multiboot.html
 const MULTIBOOT_HEADER_SIZE: usize = 0x48;
@@ -231,29 +279,14 @@ fn aout_symbol_type(s: &AoutSymbol) -> AoutSymbolType {
 // TODO: Something with the memory sizes is strange.
 fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
     if let Ok((aout, _)) = Aout::read_from_prefix(d) {
-        let elf = ElfHeader {
-            magic: ELF_MAGIC,
-            class: 1,      // 32-bit
-            data: 1,       // little endian
-            id_version: 1, // fixed
-            os_abi: 0,
-            abi_version: 0,
-            _res: [0, 0, 0, 0, 0, 0, 0],
-            elf_type: 0x2, // executable
-            machine: aout_mach_to_elf(&aout),
-            version: 1,
-            entry: aout.entry_point.into(),
-            program_header_offset: ELF_HEADER_SIZE as u32,
-            section_header_offset: 0x00,
-            flags: 0x00,
-            elf_header_size: ELF_HEADER_SIZE as u16,
-            program_header_entry_size: ELF_PROGRAM_HEADER_SIZE as u16,
-            program_header_entry_count: 3,
-            section_header_entry_size: 0,
-            section_header_entry_count: 0,
-            section_header_index_entry: 0,
-        };
-        let eb = elf.as_bytes().to_vec();
+        // TODO: calculate
+        let program_header_entry_count = 3;
+        // TODO: calculate
+        let section_header_entry_count = 2;
+
+        let program_header_offset = ELF_HEADER_SIZE as u32;
+        let section_header_offset =
+            (ELF_HEADER_SIZE + program_header_entry_count * ELF_PROGRAM_HEADER_SIZE) as u32;
 
         let ts: u32 = aout.text_size.into();
         let ds: u32 = aout.data_size.into();
@@ -263,11 +296,16 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         let text_base = 0x0011_0000;
         let data_base = text_base + align_4k(ts);
 
+        let mut program_headers: Vec<ElfProgramHeader> = vec![];
+
         // text section
-        let offset = (ELF_HEADER_SIZE + 3 * ELF_PROGRAM_HEADER_SIZE + PAD_SIZE) as u32;
+        let main_offset = (ELF_HEADER_SIZE
+            + program_header_entry_count * ELF_PROGRAM_HEADER_SIZE
+            + section_header_entry_count * ELF_SECTION_HEADER_SIZE
+            + PAD_SIZE) as u32;
         let p_text = ElfProgramHeader {
             program_type: 1,
-            offset,
+            offset: main_offset,
             virtual_addr: virtual_base + text_base,
             physical_addr: text_base,
             file_size: ts,
@@ -275,10 +313,10 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
             flags: (1 << 2) | 1,
             align: 4 * 1024,
         };
-        let p_text_b = p_text.as_bytes().to_vec();
+        program_headers.push(p_text);
 
         // data section
-        let offset = offset + ts;
+        let offset = main_offset + ts;
         let p_data = ElfProgramHeader {
             program_type: 1,
             offset,
@@ -290,7 +328,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
             flags: (1 << 2) | (1 << 1),
             align: 4 * 1024,
         };
-        let p_data_b = p_data.as_bytes().to_vec();
+        program_headers.push(p_data);
 
         // symbol table
         let offset = offset + ds;
@@ -305,15 +343,102 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
             flags: (1 << 2),
             align: 4,
         };
-        let p_st_b = p_st.as_bytes().to_vec();
+        program_headers.push(p_st);
+
+        let mut section_headers: Vec<ElfSectionHeader> = vec![];
 
         let pad = vec![0u8; PAD_SIZE];
-
         let data = &d[AOUT_HEADER_SIZE + PAD_EXTRA_SIZE..];
+
+        let est = {
+            let mut est: Vec<ElfSymbolTableEntry> = vec![];
+
+            let e = ElfSymbolTableEntry {
+                name: 0,
+                value: 0,
+                size: 0,
+                info: 0,
+                other: 0,
+                index: 0,
+            };
+            est.push(e);
+
+            let e = ElfSymbolTableEntry {
+                name: 0,
+                value: 0,
+                size: 0,
+                info: 0,
+                other: 0,
+                index: 0,
+            };
+            est.push(e);
+
+            est
+        };
+        let est_b = est.as_bytes();
+
+        let elf_st_size = (est.len() * ELF_SYMBOL_TABLE_ENTRY_SIZE) as u32;
+
+        let offset = main_offset + data.len() as u32;
+        let sth = ElfSectionHeader {
+            name: 0,
+            section_type: ElfSectionType::SymbolTable,
+            flags: 0,
+            addr: 0,
+            offset,
+            size: elf_st_size,
+            link: 1,
+            info: 0,
+            addr_align: 0,
+            entry_size: ELF_SYMBOL_TABLE_ENTRY_SIZE as u32,
+        };
+        section_headers.push(sth);
+
+        let offset = offset + elf_st_size;
+        let sth = ElfSectionHeader {
+            name: 0,
+            section_type: ElfSectionType::SymbolStringTable,
+            flags: 0,
+            addr: 0,
+            offset,
+            size: 0,
+            link: 0,
+            info: 0,
+            addr_align: 0,
+            entry_size: 0,
+        };
+        section_headers.push(sth);
+
+        let phb = program_headers.as_bytes();
+        let shb = section_headers.as_bytes();
 
         // TODO: parse Multiboot header, starting with magic 0x1BAD_B002
 
-        Ok([&eb, &p_text_b, &p_data_b, &p_st_b, &pad, data].concat())
+        let elf = ElfHeader {
+            magic: ELF_MAGIC,
+            class: 1,      // 32-bit
+            data: 1,       // little endian
+            id_version: 1, // fixed
+            os_abi: 0,
+            abi_version: 0,
+            _res: [0, 0, 0, 0, 0, 0, 0],
+            elf_type: 0x2, // executable
+            machine: aout_mach_to_elf(&aout),
+            version: 1,
+            entry: aout.entry_point.into(),
+            program_header_offset,
+            section_header_offset,
+            flags: 0x00,
+            elf_header_size: ELF_HEADER_SIZE as u16,
+            program_header_entry_size: ELF_PROGRAM_HEADER_SIZE as u16,
+            program_header_entry_count: program_header_entry_count as u16,
+            section_header_entry_size: ELF_SECTION_HEADER_SIZE as u16,
+            section_header_entry_count: section_header_entry_count as u16,
+            section_header_index_entry: 0,
+        };
+        let eb = elf.as_bytes();
+
+        Ok([eb, phb, shb, &pad, data, est_b].concat())
     } else {
         Err("Could not parse a.out".to_string())
     }

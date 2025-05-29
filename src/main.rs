@@ -45,6 +45,20 @@ struct Aout {
     pc_size: U32,           /* pc/line number table */
 }
 
+#[derive(FromBytes, Immutable, IntoBytes, Clone, Copy, Debug)]
+#[repr(C, packed)]
+struct AoutSymbolHeader {
+    spacer: [u8; 4],
+    value: U32,
+    sym_type: u8,
+}
+
+#[derive(Clone, Debug)]
+struct AoutSymbol<'a> {
+    header: AoutSymbolHeader,
+    name: &'a str,
+}
+
 // https://en.wikipedia.org/wiki/Executable_and_Linkable_Format
 // https://refspecs.linuxfoundation.org/elf/gabi4+/ch4.eheader.html
 #[derive(FromBytes, Immutable, IntoBytes, Clone, Copy, Debug)]
@@ -114,6 +128,95 @@ fn align_4k(v: u32) -> u32 {
 
 // 🧝✨
 const ELF_MAGIC: [u8; 4] = [0x7f, b'E', b'L', b'F'];
+
+const SYM_TEXT: u8 = b'T';
+const SYM_STATIC_TEXT: u8 = b't';
+const SYM_LEAF_FN: u8 = b'L';
+const SYM_STATIC_LEAF_FN: u8 = b'l';
+const SYM_DATA: u8 = b'D';
+const SYM_STATIC_DATA: u8 = b'd';
+const SYM_BSS_SEGMENT: u8 = b'B';
+const SYM_STATIC_BSS_SEGMENT: u8 = b'b';
+const SYM_AUTO_VAR: u8 = b'a';
+const SYM_FN_PARAM: u8 = b'p';
+const SYM_SRC_COMP: u8 = b'f';
+const SYM_SRC_FILE: u8 = b'z';
+const SYM_SRC_OFFSET: u8 = b'Z';
+const SYM_E: u8 = b'e';
+const SYM_G: u8 = b'g';
+const SYM_I: u8 = b'I';
+const SYM_M: u8 = b'm';
+const SYM_O: u8 = b'o';
+const SYM_S: u8 = b'S';
+const SYM_U: u8 = b'u';
+const SYM_V: u8 = b'v';
+const SYM_W: u8 = b'w';
+const SYM__: u8 = b'_';
+const SYM_0: u8 = b'0';
+const SYM_CURLY: u8 = b'{';
+
+#[derive(Debug, Eq, PartialEq)]
+enum AoutSymbolType {
+    TextSegment,
+    StaticTextSegment,
+    LeafFunction,
+    StaticLeafFunction,
+    DataSegment,
+    StaticDataSegment,
+    BssSegment,
+    StaticBssSegment,
+    AutoVariable,
+    FunctionParam,
+    SourceFileNameComp,
+    SourceFileName,
+    SourceFileOffset,
+    ____X,
+    Curly,
+    E,
+    G,
+    I,
+    M,
+    O,
+    S,
+    U,
+    V,
+    W,
+    Zero,
+    Unknown,
+}
+
+fn aout_symbol_type(s: &AoutSymbol) -> AoutSymbolType {
+    // First bit needs to be discarded.
+    match s.header.sym_type & !0x80 {
+        SYM_TEXT => AoutSymbolType::TextSegment,
+        SYM_STATIC_TEXT => AoutSymbolType::StaticTextSegment,
+        SYM_LEAF_FN => AoutSymbolType::LeafFunction,
+        SYM_STATIC_LEAF_FN => AoutSymbolType::StaticLeafFunction,
+        SYM_DATA => AoutSymbolType::DataSegment,
+        SYM_STATIC_DATA => AoutSymbolType::StaticDataSegment,
+        SYM_STATIC_BSS_SEGMENT => AoutSymbolType::StaticBssSegment,
+        SYM_BSS_SEGMENT => AoutSymbolType::BssSegment,
+        SYM_AUTO_VAR => AoutSymbolType::AutoVariable,
+        SYM_FN_PARAM => AoutSymbolType::FunctionParam,
+        SYM_SRC_COMP => AoutSymbolType::SourceFileNameComp,
+        SYM_SRC_FILE => AoutSymbolType::SourceFileName,
+        SYM_SRC_OFFSET => AoutSymbolType::SourceFileOffset,
+        SYM_E => AoutSymbolType::E,
+        SYM_G => AoutSymbolType::G,
+        SYM_I => AoutSymbolType::I,
+        SYM_M => AoutSymbolType::M,
+        SYM_O => AoutSymbolType::O,
+        SYM_S => AoutSymbolType::S,
+        SYM_U => AoutSymbolType::U,
+        SYM_V => AoutSymbolType::V,
+        SYM_W => AoutSymbolType::W,
+        SYM__ => AoutSymbolType::____X,
+        SYM_0 => AoutSymbolType::Zero,
+        SYM_CURLY => AoutSymbolType::Curly,
+        // TODO: What else?
+        _ => AoutSymbolType::Unknown,
+    }
+}
 
 // TODO: Something with the memory sizes is strange.
 fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
@@ -206,6 +309,48 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 
+impl<'a> Display for AoutSymbol<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let t = self.get_type();
+        let sym_type = match t {
+            AoutSymbolType::Unknown => format!("{:02x?}", self.header.sym_type),
+            _ => format!("{t:?}"),
+        };
+        let sym_name = self.name();
+        let v = self.header.value;
+        write!(f, "Symbol {v:08x}: {sym_type:20} {sym_name}")
+    }
+}
+
+impl<'a> AoutSymbol<'a> {
+    pub fn len(&self) -> usize {
+        SYM_HEADER_SIZE + self.name().len() + 1
+    }
+
+    pub fn get_type(&self) -> AoutSymbolType {
+        aout_symbol_type(self)
+    }
+
+    pub fn name(&self) -> String {
+        self.name.to_string()
+    }
+}
+
+const SYM_HEADER_SIZE: usize = 9;
+// returns the symbol size
+fn parse_sym(st: &[u8]) -> AoutSymbol {
+    if let Ok((header, _)) = AoutSymbolHeader::read_from_prefix(st) {
+        let max_len = 0x80.min(st.len() - SYM_HEADER_SIZE);
+        let s = &st[SYM_HEADER_SIZE..SYM_HEADER_SIZE + max_len];
+        let namex = CStr::from_bytes_until_nul(s).unwrap();
+        let name = namex.to_str().unwrap_or("[noname]");
+
+        AoutSymbol { header, name }
+    } else {
+        panic!();
+    }
+}
+
 fn main() -> std::io::Result<()> {
     let cmd = Cli::parse().cmd;
     // Default to log level "info". Otherwise, you get no "regular" logs.
@@ -270,6 +415,27 @@ fn main() -> std::io::Result<()> {
 
                 println!("Symbol table size: {sts:08x}");
                 println!("Symbol table @ {st_offset:08x} {std:02x?}");
+
+                let st = &d[st_offset..st_offset + sts as usize];
+                let mut offset = 0;
+
+                let mut syms: Vec<AoutSymbol> = vec![];
+                while offset < sts as usize {
+                    let sym = parse_sym(&st[offset..]);
+                    match sym.get_type() {
+                        AoutSymbolType::Unknown => {
+                            let t = sym.header.sym_type;
+                            let v = sym.header.value;
+                            let h = format!("{t:02x?} {v:08x}");
+                            println!(" {offset:08x}: Unknown symbol {h}");
+                        }
+                        _ => {
+                            println!(" {offset:08x}: {sym}");
+                        }
+                    }
+                    offset += sym.len();
+                    syms.push(sym);
+                }
             }
         }
     }

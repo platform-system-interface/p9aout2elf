@@ -229,7 +229,7 @@ fn main() -> std::io::Result<()> {
             let d = fs::read(file_name).unwrap();
 
             if let Ok(goblin::Object::Elf(elf)) = goblin::Object::parse(&d) {
-                println!("elf: {:#?}", &elf);
+                println!("This is an ELF: {:#02x?}", &elf);
                 return Ok(());
             }
 
@@ -238,18 +238,38 @@ fn main() -> std::io::Result<()> {
                     0x978a_0000 => "amd64",
                     _ => "unknown",
                 };
+
+                let ts: u32 = aout.text_size.into();
+                let ds: u32 = aout.data_size.into();
+                let sts: u32 = aout.symbol_table_size.into();
+                let ep: u32 = aout.entry_point.into();
+
+                // The sections are in a fixed order:
+                // - text (code)
+                // - data
+                // - symbols
+                // - bss?
+                let t_offset = AOUT_HEADER_SIZE + PAD_EXTRA_SIZE;
+                let e_offset = t_offset + ep as usize;
+                let d_offset = t_offset + ts as usize;
+                let st_offset = d_offset + ds as usize;
+
+                let pd = &d[t_offset..t_offset + 16];
+                let epd = &d[e_offset..e_offset + 16];
+
+                let std = &d[st_offset..st_offset + 16];
+
                 println!("Architecture: {arch}");
 
-                let ts = aout.text_size;
-                println!("Text size: {ts:08x}");
+                println!("Code size: {ts:08x}");
+                println!("Code start @ {t_offset:08x} {pd:02x?}");
+                println!("     Entry @ {ep:08x} {epd:02x?}");
 
-                println!("{aout:#010x?}");
+                println!("Data size: {ds:08x}");
+                println!("Data start @ {ds:08x}");
 
-                let ep: u32 = aout.entry_point.into();
-                let ep = ep as usize;
-
-                let epd = &d[ep..ep + 16];
-                println!("Entry: {epd:02x?}");
+                println!("Symbol table size: {sts:08x}");
+                println!("Symbol table @ {st_offset:08x} {std:02x?}");
             }
         }
     }

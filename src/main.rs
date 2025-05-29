@@ -49,7 +49,7 @@ struct Aout {
 // https://refspecs.linuxfoundation.org/elf/gabi4+/ch4.eheader.html
 #[derive(FromBytes, Immutable, IntoBytes, Clone, Copy, Debug)]
 #[repr(C, packed)]
-struct Elf {
+struct ElfHeader {
     magic: [u8; 4],
     class: u8,
     data: u8,       // endianness
@@ -87,7 +87,7 @@ struct ElfProgramHeader {
 
 const AOUT_HEADER_SIZE: usize = std::mem::size_of::<Aout>();
 
-const ELF_HEADER_SIZE: usize = std::mem::size_of::<Elf>();
+const ELF_HEADER_SIZE: usize = std::mem::size_of::<ElfHeader>();
 
 const ELF_PROGRAM_HEADER_SIZE: usize = std::mem::size_of::<ElfProgramHeader>();
 
@@ -112,11 +112,14 @@ fn align_4k(v: u32) -> u32 {
     ((v - 1) / 4096 + 1) * 4096
 }
 
+// 🧝✨
+const ELF_MAGIC: [u8; 4] = [0x7f, b'E', b'L', b'F'];
+
 // TODO: Something with the memory sizes is strange.
 fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
     if let Ok((aout, _)) = Aout::read_from_prefix(d) {
-        let elf = Elf {
-            magic: [0x7f, b'E', b'L', b'F'],
+        let elf = ElfHeader {
+            magic: ELF_MAGIC,
             class: 1,      // 32-bit
             data: 1,       // little endian
             id_version: 1, // fixed

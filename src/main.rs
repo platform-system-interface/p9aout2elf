@@ -1,4 +1,6 @@
 #![allow(unused)]
+use std::ffi::CStr;
+use std::fmt::Display;
 use std::{fs, io::Write};
 
 use clap::{Parser, Subcommand};
@@ -18,6 +20,12 @@ enum Command {
     Parse {
         #[arg(index = 1)]
         file_name: String,
+        /// Print section previews and more
+        #[clap(long, short)]
+        debug: bool,
+        /// Dump symbol table entries and more
+        #[clap(long, short)]
+        verbose: bool,
     },
 }
 
@@ -129,6 +137,7 @@ fn align_4k(v: u32) -> u32 {
 // 🧝✨
 const ELF_MAGIC: [u8; 4] = [0x7f, b'E', b'L', b'F'];
 
+// sys/man/6/a.out
 const SYM_TEXT: u8 = b'T';
 const SYM_STATIC_TEXT: u8 = b't';
 const SYM_LEAF_FN: u8 = b'L';
@@ -139,13 +148,13 @@ const SYM_BSS_SEGMENT: u8 = b'B';
 const SYM_STATIC_BSS_SEGMENT: u8 = b'b';
 const SYM_AUTO_VAR: u8 = b'a';
 const SYM_FN_PARAM: u8 = b'p';
+const SYM_FRAME_SYMBOL: u8 = b'm';
 const SYM_SRC_COMP: u8 = b'f';
 const SYM_SRC_FILE: u8 = b'z';
 const SYM_SRC_OFFSET: u8 = b'Z';
 const SYM_E: u8 = b'e';
 const SYM_G: u8 = b'g';
 const SYM_I: u8 = b'I';
-const SYM_M: u8 = b'm';
 const SYM_O: u8 = b'o';
 const SYM_S: u8 = b'S';
 const SYM_U: u8 = b'u';
@@ -167,6 +176,7 @@ enum AoutSymbolType {
     StaticBssSegment,
     AutoVariable,
     FunctionParam,
+    FrameSymbol,
     SourceFileNameComp,
     SourceFileName,
     SourceFileOffset,
@@ -198,13 +208,13 @@ fn aout_symbol_type(s: &AoutSymbol) -> AoutSymbolType {
         SYM_BSS_SEGMENT => AoutSymbolType::BssSegment,
         SYM_AUTO_VAR => AoutSymbolType::AutoVariable,
         SYM_FN_PARAM => AoutSymbolType::FunctionParam,
+        SYM_FRAME_SYMBOL => AoutSymbolType::FrameSymbol,
         SYM_SRC_COMP => AoutSymbolType::SourceFileNameComp,
         SYM_SRC_FILE => AoutSymbolType::SourceFileName,
         SYM_SRC_OFFSET => AoutSymbolType::SourceFileOffset,
         SYM_E => AoutSymbolType::E,
         SYM_G => AoutSymbolType::G,
         SYM_I => AoutSymbolType::I,
-        SYM_M => AoutSymbolType::M,
         SYM_O => AoutSymbolType::O,
         SYM_S => AoutSymbolType::S,
         SYM_U => AoutSymbolType::U,
@@ -351,6 +361,32 @@ fn parse_sym(st: &[u8]) -> AoutSymbol {
     }
 }
 
+fn parse_aout_symbols(st: &[u8], dump: bool) -> Vec<AoutSymbol> {
+    let mut syms: Vec<AoutSymbol> = vec![];
+    let mut offset = 0;
+
+    while offset < st.len() {
+        let sym = parse_sym(&st[offset..]);
+        if dump {
+            match sym.get_type() {
+                AoutSymbolType::Unknown => {
+                    let t = sym.header.sym_type;
+                    let v = sym.header.value;
+                    let h = format!("{t:02x?} {v:08x}");
+                    println!(" {offset:08x}: Unknown symbol {h}");
+                }
+                _ => {
+                    println!(" {offset:08x}: {sym}");
+                }
+            }
+        }
+        offset += sym.len();
+        syms.push(sym);
+    }
+
+    syms
+}
+
 fn main() -> std::io::Result<()> {
     let cmd = Cli::parse().cmd;
     // Default to log level "info". Otherwise, you get no "regular" logs.
@@ -369,7 +405,11 @@ fn main() -> std::io::Result<()> {
                 f.write_all(&image);
             }
         }
-        Command::Parse { file_name } => {
+        Command::Parse {
+            file_name,
+            debug,
+            verbose,
+        } => {
             println!("File: {file_name}");
             let d = fs::read(file_name).unwrap();
 
@@ -407,35 +447,33 @@ fn main() -> std::io::Result<()> {
                 println!("Architecture: {arch}");
 
                 println!("Code size: {ts:08x}");
-                println!("Code start @ {t_offset:08x} {pd:02x?}");
-                println!("     Entry @ {ep:08x} {epd:02x?}");
+                let x = if debug {
+                    format!(" {pd:02x?}")
+                } else {
+                    "".to_string()
+                };
+                println!("Code start @ {t_offset:08x}{x}");
+                let x = if debug {
+                    format!(" {epd:02x?}")
+                } else {
+                    "".to_string()
+                };
+                println!("     Entry @ {ep:08x}{x}");
 
                 println!("Data size: {ds:08x}");
-                println!("Data start @ {ds:08x}");
+                println!("Data start @ {d_offset:08x}");
 
                 println!("Symbol table size: {sts:08x}");
-                println!("Symbol table @ {st_offset:08x} {std:02x?}");
+                let x = if debug {
+                    format!(" {std:02x?}")
+                } else {
+                    "".to_string()
+                };
+                println!("Symbol table @ {st_offset:08x}{x}");
 
-                let st = &d[st_offset..st_offset + sts as usize];
-                let mut offset = 0;
-
-                let mut syms: Vec<AoutSymbol> = vec![];
-                while offset < sts as usize {
-                    let sym = parse_sym(&st[offset..]);
-                    match sym.get_type() {
-                        AoutSymbolType::Unknown => {
-                            let t = sym.header.sym_type;
-                            let v = sym.header.value;
-                            let h = format!("{t:02x?} {v:08x}");
-                            println!(" {offset:08x}: Unknown symbol {h}");
-                        }
-                        _ => {
-                            println!(" {offset:08x}: {sym}");
-                        }
-                    }
-                    offset += sym.len();
-                    syms.push(sym);
-                }
+                let sym_table_data = &d[st_offset..st_offset + sts as usize];
+                let syms = parse_aout_symbols(sym_table_data, verbose);
+                println!("{} symbols found", syms.len());
             }
         }
     }

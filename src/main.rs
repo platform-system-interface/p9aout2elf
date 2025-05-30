@@ -616,7 +616,7 @@ fn main() -> std::io::Result<()> {
 
                 let pd = &d[t_offset..t_offset + 16];
                 let epd = &d[e_offset..e_offset + 16];
-
+                let dd = &d[d_offset..d_offset + 16];
                 let std = &d[st_offset..st_offset + 16];
 
                 println!("Architecture: {arch}");
@@ -636,7 +636,12 @@ fn main() -> std::io::Result<()> {
                 println!("     Entry @ {ep:08x}{x}");
 
                 println!("Data size: {ds:08x}");
-                println!("Data start @ {d_offset:08x}");
+                let x = if debug {
+                    format!(" {dd:02x?}")
+                } else {
+                    "".to_string()
+                };
+                println!("      Data @ {d_offset:08x}{x}");
 
                 println!("Symbol table size: {sts:08x}");
                 let x = if debug {

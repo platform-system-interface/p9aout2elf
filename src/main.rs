@@ -418,8 +418,8 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         let ph = ElfProgramHeader {
             program_type: ElfProgramType::Null,
             offset,
-            virtual_addr: 0x0000_0000,  // TODO: ?
-            physical_addr: 0x0000_0000, // TODO: ?
+            virtual_addr: 0,
+            physical_addr: 0,
             file_size: ss,
             // TODO: ?!
             memory_size: ss - 0x0004_a172,
@@ -595,7 +595,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 
-impl<'a> Display for AoutSymbol<'a> {
+impl Display for AoutSymbol<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let t = self.get_type();
         let sym_type = match t {
@@ -608,7 +608,7 @@ impl<'a> Display for AoutSymbol<'a> {
     }
 }
 
-impl<'a> AoutSymbol<'a> {
+impl AoutSymbol<'_> {
     pub fn len(&self) -> usize {
         SYM_HEADER_SIZE + self.name().len() + 1
     }

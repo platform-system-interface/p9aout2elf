@@ -68,6 +68,7 @@ struct AoutSymbol<'a> {
 }
 
 // https://en.wikipedia.org/wiki/Executable_and_Linkable_Format
+// https://gist.github.com/DhavalKapil/2243db1b732b211d0c16fd5d9140ab0b
 // https://refspecs.linuxfoundation.org/elf/gabi4+/ch4.eheader.html
 #[derive(FromBytes, Immutable, IntoBytes, Clone, Copy, Debug)]
 #[repr(C, packed)]
@@ -107,7 +108,7 @@ struct ElfProgramHeader {
     align: u32,
 }
 
-// https://gist.github.com/DhavalKapil/2243db1b732b211d0c16fd5d9140ab0b
+// https://refspecs.linuxfoundation.org/elf/gabi4+/ch4.sheader.html
 #[derive(Immutable, IntoBytes, Clone, Copy, Debug)]
 #[repr(u32)]
 enum ElfSectionType {
@@ -117,9 +118,27 @@ enum ElfSectionType {
     SymbolStringTable,
     RelocationEntriesWithAddends,
     SymbolHashTable,
-    // TODO
+    Dynamic,
+    Note,
+    NoBits,
+    Rel,
+    Shlib,
+    DynamicSymbols,
+    // mind the gap
+    InitArray = 14,
+    FiniArray,
+    PreinitArray,
+    Group,
+    SymbolTableIndex,
+    LoOS = 0x60000000,
+    HiOS = 0x6fffffff,
+    LoProc = 0x70000000,
+    HiProc = 0x7fffffff,
+    LoUser = 0x80000000,
+    HiUser = 0xffffffff,
 }
 
+// https://refspecs.linuxfoundation.org/elf/gabi4+/ch4.sheader.html
 #[derive(Immutable, IntoBytes, Clone, Copy, Debug)]
 #[repr(C, packed)]
 struct ElfSectionHeader {
@@ -135,6 +154,7 @@ struct ElfSectionHeader {
     entry_size: u32,
 }
 
+// https://refspecs.linuxfoundation.org/elf/gabi4+/ch4.symtab.html
 #[derive(Immutable, IntoBytes, Clone, Copy, Debug)]
 #[repr(C, packed)]
 struct ElfSymbolTableEntry {
@@ -143,10 +163,10 @@ struct ElfSymbolTableEntry {
     size: u32,
     info: u8,
     other: u8,
-    index: u16,
+    section_index: u16,
 }
 
-// https://refspecs.linuxbase.org/elf/gabi4+/ch4.symtab.html
+// https://refspecs.linuxfoundation.org/elf/gabi4+/ch4.symtab.html
 struct ElfSymbol {
     // x
 }
@@ -279,10 +299,12 @@ fn aout_symbol_type(s: &AoutSymbol) -> AoutSymbolType {
 // TODO: Something with the memory sizes is strange.
 fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
     if let Ok((aout, _)) = Aout::read_from_prefix(d) {
+        let entry: u32 = aout.entry_point.into();
+
         // TODO: calculate
         let program_header_entry_count = 3;
         // TODO: calculate
-        let section_header_entry_count = 2;
+        let section_header_entry_count = 3;
 
         let program_header_offset = ELF_HEADER_SIZE as u32;
         let section_header_offset =
@@ -350,26 +372,27 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         let pad = vec![0u8; PAD_SIZE];
         let data = &d[AOUT_HEADER_SIZE + PAD_EXTRA_SIZE..];
 
+        // symbol table
         let est = {
             let mut est: Vec<ElfSymbolTableEntry> = vec![];
 
             let e = ElfSymbolTableEntry {
-                name: 0,
-                value: 0,
-                size: 0,
-                info: 0,
+                name: 23,
+                value: 0x8011_0000,
+                size: 20,
+                info: 0x12, // global function
                 other: 0,
-                index: 0,
+                section_index: 2,
             };
             est.push(e);
 
             let e = ElfSymbolTableEntry {
-                name: 0,
-                value: 0,
-                size: 0,
-                info: 0,
+                name: 26,
+                value: 0x8011_000e,
+                size: 10,
+                info: 0x12, // global function
                 other: 0,
-                index: 0,
+                section_index: 2,
             };
             est.push(e);
 
@@ -377,37 +400,64 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         };
         let est_b = est.as_bytes();
 
-        let elf_st_size = (est.len() * ELF_SYMBOL_TABLE_ENTRY_SIZE) as u32;
+        let elf_sym_tab_size = (est.len() * ELF_SYMBOL_TABLE_ENTRY_SIZE) as u32;
 
+        // string table
+        let f = [0u8].as_bytes();
+        let sy = c".symtab".to_bytes_with_nul();
+        let st = c".strtab".to_bytes_with_nul();
+        let da = c".text".to_bytes_with_nul();
+        let a = c"AA".to_bytes_with_nul();
+        let b = c"B".to_bytes_with_nul();
+
+        // TODO
+        let str_tab = [f, sy, st, da, a, b].concat();
+        let elf_str_tab_size = str_tab.len() as u32;
+
+        // section headers
         let offset = main_offset + data.len() as u32;
-        let sth = ElfSectionHeader {
-            name: 0,
+        let sh = ElfSectionHeader {
+            name: 1,
             section_type: ElfSectionType::SymbolTable,
             flags: 0,
             addr: 0,
             offset,
-            size: elf_st_size,
+            size: elf_sym_tab_size,
             link: 1,
             info: 0,
             addr_align: 0,
             entry_size: ELF_SYMBOL_TABLE_ENTRY_SIZE as u32,
         };
-        section_headers.push(sth);
+        section_headers.push(sh);
 
-        let offset = offset + elf_st_size;
-        let sth = ElfSectionHeader {
-            name: 0,
+        let offset = offset + elf_sym_tab_size;
+        let sh = ElfSectionHeader {
+            name: 9,
             section_type: ElfSectionType::SymbolStringTable,
             flags: 0,
             addr: 0,
             offset,
-            size: 0,
+            size: elf_str_tab_size,
             link: 0,
             info: 0,
             addr_align: 0,
             entry_size: 0,
         };
-        section_headers.push(sth);
+        section_headers.push(sh);
+
+        let sh = ElfSectionHeader {
+            name: 17,
+            section_type: ElfSectionType::SymbolStringTable,
+            flags: 0,
+            addr: 0x8011_0000,
+            offset: main_offset + entry,
+            size: 0x1000,
+            link: 0,
+            info: 0,
+            addr_align: 0,
+            entry_size: 0,
+        };
+        section_headers.push(sh);
 
         let phb = program_headers.as_bytes();
         let shb = section_headers.as_bytes();
@@ -425,7 +475,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
             elf_type: 0x2, // executable
             machine: aout_mach_to_elf(&aout),
             version: 1,
-            entry: aout.entry_point.into(),
+            entry,
             program_header_offset,
             section_header_offset,
             flags: 0x00,
@@ -434,11 +484,11 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
             program_header_entry_count: program_header_entry_count as u16,
             section_header_entry_size: ELF_SECTION_HEADER_SIZE as u16,
             section_header_entry_count: section_header_entry_count as u16,
-            section_header_index_entry: 0,
+            section_header_index_entry: 1,
         };
         let eb = elf.as_bytes();
 
-        Ok([eb, phb, shb, &pad, data, est_b].concat())
+        Ok([eb, phb, shb, &pad, data, est_b, &str_tab].concat())
     } else {
         Err("Could not parse a.out".to_string())
     }

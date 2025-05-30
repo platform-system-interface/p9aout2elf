@@ -95,6 +95,9 @@ struct ElfHeader {
     section_header_index_entry: u16,
 }
 
+// NOTE: This is fixed by our convention. Be careful with section changes.
+const STRING_TABLE_INDEX: u32 = 4;
+
 impl ElfHeader {
     fn new(
         program_header_entry_count: u32,
@@ -126,8 +129,7 @@ impl ElfHeader {
             program_header_entry_count: program_header_entry_count as u16,
             section_header_entry_size: ELF_SECTION_HEADER_SIZE as u16,
             section_header_entry_count: section_header_entry_count as u16,
-            // NOTE: section name string table index, fixed by our convention
-            section_header_index_entry: 4,
+            section_header_index_entry: STRING_TABLE_INDEX as u16,
         }
     }
 }
@@ -568,8 +570,8 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
             addr: 0,
             offset,
             size,
-            link: 4,                 // index of string table header
-            info: elf_sym_tab_count, // apparently number of symbols
+            link: STRING_TABLE_INDEX,
+            info: elf_sym_tab_count,
             addr_align: 8,
             entry_size: ELF_SYMBOL_TABLE_ENTRY_SIZE as u32,
         };

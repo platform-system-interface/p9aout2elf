@@ -126,8 +126,8 @@ impl ElfHeader {
             program_header_entry_count: program_header_entry_count as u16,
             section_header_entry_size: ELF_SECTION_HEADER_SIZE as u16,
             section_header_entry_count: section_header_entry_count as u16,
-            // NOTE: This is just our convention now.
-            section_header_index_entry: 1,
+            // NOTE: section name string table index, fixed by our convention
+            section_header_index_entry: 4,
         }
     }
 }
@@ -354,7 +354,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         // TODO: calculate
         let program_header_entry_count = 4;
         // TODO: calculate
-        let section_header_entry_count = 4;
+        let section_header_entry_count = 5;
 
         let ts: u32 = aout.text_size.into();
         let ds: u32 = aout.data_size.into();
@@ -470,21 +470,21 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
 
             let e = ElfSymbolTableEntry {
                 name: 29,
-                value: 0x8011_0000,
+                value: 0x0011_0000,
                 size: 24,
                 info: SYM_LOCAL | 2, // global/function
                 other: 0,
-                section_index: 2,
+                section_index: 1,
             };
             t.push(e);
 
             let e = ElfSymbolTableEntry {
                 name: 32,
-                value: 0x8011_0018,
+                value: 0x0011_0018,
                 size: 52,
                 info: SYM_LOCAL | 2, // global/function
                 other: 0,
-                section_index: 2,
+                section_index: 1,
             };
             t.push(e);
 
@@ -512,36 +512,18 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
 
         // ----------- section headers
         let mut section_headers: Vec<ElfSectionHeader> = vec![];
-        // .symtab
-        let elf_sym_tab_count = elf_sym_tab.len() as u32;
-        let size = elf_sym_tab_count * ELF_SYMBOL_TABLE_ENTRY_SIZE as u32;
-        let offset = main_offset + data.len() as u32;
+
+        // empty
         let sh = ElfSectionHeader {
-            name: 1,
-            section_type: ElfSectionType::SymbolTable,
+            name: 0,
+            section_type: ElfSectionType::Null,
             flags: 0,
             addr: 0,
-            offset,
-            size,
-            link: 1,                 // index of string table header
-            info: elf_sym_tab_count, // apparently number of symbols
-            addr_align: 8,
-            entry_size: ELF_SYMBOL_TABLE_ENTRY_SIZE as u32,
-        };
-        section_headers.push(sh);
-        // .strtab
-        let offset = offset + size;
-        let size = str_tab.len() as u32;
-        let sh = ElfSectionHeader {
-            name: 9,
-            section_type: ElfSectionType::SymbolStringTable,
-            flags: 0,
-            addr: 0,
-            offset,
-            size,
+            offset: 0,
+            size: 0,
             link: 0,
             info: 0,
-            addr_align: 1,
+            addr_align: 0,
             entry_size: 0,
         };
         section_headers.push(sh);
@@ -572,6 +554,39 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
             link: 1,
             info: 0,
             addr_align: 32,
+            entry_size: 0,
+        };
+        section_headers.push(sh);
+        // .symtab
+        let elf_sym_tab_count = elf_sym_tab.len() as u32;
+        let size = elf_sym_tab_count * ELF_SYMBOL_TABLE_ENTRY_SIZE as u32;
+        let offset = main_offset + data.len() as u32;
+        let sh = ElfSectionHeader {
+            name: 1,
+            section_type: ElfSectionType::SymbolTable,
+            flags: 0,
+            addr: 0,
+            offset,
+            size,
+            link: 4,                 // index of string table header
+            info: elf_sym_tab_count, // apparently number of symbols
+            addr_align: 8,
+            entry_size: ELF_SYMBOL_TABLE_ENTRY_SIZE as u32,
+        };
+        section_headers.push(sh);
+        // .strtab
+        let offset = offset + size;
+        let size = str_tab.len() as u32;
+        let sh = ElfSectionHeader {
+            name: 9,
+            section_type: ElfSectionType::SymbolStringTable,
+            flags: 0,
+            addr: 0,
+            offset,
+            size,
+            link: 0,
+            info: 0,
+            addr_align: 1,
             entry_size: 0,
         };
         section_headers.push(sh);

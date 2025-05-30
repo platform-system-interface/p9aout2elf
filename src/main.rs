@@ -510,7 +510,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
             let sy = c".symtab".to_bytes_with_nul();
             let st = c".strtab".to_bytes_with_nul();
             let sh = c".shstrtab".to_bytes_with_nul();
-            [f, sy, st, te, da, sh].concat()
+            [f, te, da, sy, st, sh].concat()
         };
 
         // https://refspecs.linuxfoundation.org/elf/gabi4+/ch4.sheader.html#sh_flags

@@ -95,8 +95,9 @@ struct ElfHeader {
     section_header_index_entry: u16,
 }
 
-// NOTE: This is fixed by our convention. Be careful with section changes.
-const STRING_TABLE_INDEX: u32 = 4;
+// NOTE: These are fixed by our convention. Be careful with section changes.
+const SYM_STRING_TABLE_INDEX: u32 = 4;
+const SH_STRING_TABLE_INDEX: u32 = 5;
 
 impl ElfHeader {
     fn new(
@@ -129,7 +130,7 @@ impl ElfHeader {
             program_header_entry_count: program_header_entry_count as u16,
             section_header_entry_size: ELF_SECTION_HEADER_SIZE as u16,
             section_header_entry_count: section_header_entry_count as u16,
-            section_header_index_entry: STRING_TABLE_INDEX as u16,
+            section_header_index_entry: SH_STRING_TABLE_INDEX as u16,
         }
     }
 }
@@ -356,7 +357,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         // TODO: calculate
         let program_header_entry_count = 4;
         // TODO: calculate
-        let section_header_entry_count = 5;
+        let section_header_entry_count = 6;
 
         let ts: u32 = aout.text_size.into();
         let ds: u32 = aout.data_size.into();
@@ -471,7 +472,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
             t.push(e);
 
             let e = ElfSymbolTableEntry {
-                name: 29,
+                name: 1,
                 value: 0x0011_0000,
                 size: 24,
                 info: SYM_LOCAL | 2, // global/function
@@ -481,7 +482,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
             t.push(e);
 
             let e = ElfSymbolTableEntry {
-                name: 32,
+                name: 4,
                 value: 0x0011_0018,
                 size: 52,
                 info: SYM_LOCAL | 2, // global/function
@@ -498,13 +499,18 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         // TODO
         let str_tab = {
             let f = [0u8].as_bytes();
-            let sy = c".symtab".to_bytes_with_nul();
-            let st = c".strtab".to_bytes_with_nul();
-            let te = c".text".to_bytes_with_nul();
-            let da = c".data".to_bytes_with_nul();
             let a = c"AA".to_bytes_with_nul();
             let b = c"B".to_bytes_with_nul();
-            [f, sy, st, te, da, a, b].concat()
+            [f, a, b].concat()
+        };
+        let sh_str_tab = {
+            let f = [0u8].as_bytes();
+            let te = c".text".to_bytes_with_nul();
+            let da = c".data".to_bytes_with_nul();
+            let sy = c".symtab".to_bytes_with_nul();
+            let st = c".strtab".to_bytes_with_nul();
+            let sh = c".shstrtab".to_bytes_with_nul();
+            [f, sy, st, te, da, sh].concat()
         };
 
         // https://refspecs.linuxfoundation.org/elf/gabi4+/ch4.sheader.html#sh_flags
@@ -515,7 +521,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         // ----------- section headers
         let mut section_headers: Vec<ElfSectionHeader> = vec![];
 
-        // empty
+        // NOTE: empty section, necessary for symbol resolution to work
         let sh = ElfSectionHeader {
             name: 0,
             section_type: ElfSectionType::Null,
@@ -532,7 +538,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         // .text
         let offset = main_offset + entry;
         let sh = ElfSectionHeader {
-            name: 17,
+            name: 1,
             section_type: ElfSectionType::ProgBits,
             flags: SH_FLAG_ALLOC | SH_FLAG_EXEC,
             addr: entry,
@@ -547,7 +553,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         // .data
         let offset = main_offset + ts;
         let sh = ElfSectionHeader {
-            name: 23,
+            name: 7,
             section_type: ElfSectionType::ProgBits,
             flags: SH_FLAG_ALLOC | SH_FLAG_WRITE,
             addr: load_offset,
@@ -564,13 +570,13 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         let size = elf_sym_tab_count * ELF_SYMBOL_TABLE_ENTRY_SIZE as u32;
         let offset = main_offset + data.len() as u32;
         let sh = ElfSectionHeader {
-            name: 1,
+            name: 13,
             section_type: ElfSectionType::SymbolTable,
             flags: 0,
             addr: 0,
             offset,
             size,
-            link: STRING_TABLE_INDEX,
+            link: SYM_STRING_TABLE_INDEX,
             info: elf_sym_tab_count,
             addr_align: 8,
             entry_size: ELF_SYMBOL_TABLE_ENTRY_SIZE as u32,
@@ -580,7 +586,23 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         let offset = offset + size;
         let size = str_tab.len() as u32;
         let sh = ElfSectionHeader {
-            name: 9,
+            name: 21,
+            section_type: ElfSectionType::SymbolStringTable,
+            flags: 0,
+            addr: 0,
+            offset,
+            size,
+            link: 0,
+            info: 0,
+            addr_align: 1,
+            entry_size: 0,
+        };
+        section_headers.push(sh);
+        // .strtab
+        let offset = offset + size;
+        let size = sh_str_tab.len() as u32;
+        let sh = ElfSectionHeader {
+            name: 29,
             section_type: ElfSectionType::SymbolStringTable,
             flags: 0,
             addr: 0,
@@ -606,7 +628,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         );
         let eb = eh.as_bytes();
 
-        Ok([eb, phb, shb, &pad, data, est_b, &str_tab].concat())
+        Ok([eb, phb, shb, &pad, data, est_b, &str_tab, &sh_str_tab].concat())
     } else {
         Err("Could not parse a.out".to_string())
     }

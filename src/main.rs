@@ -69,18 +69,68 @@ struct AoutSymbol<'a> {
 
 // https://en.wikipedia.org/wiki/Executable_and_Linkable_Format
 // https://gist.github.com/DhavalKapil/2243db1b732b211d0c16fd5d9140ab0b
+
+#[derive(Immutable, IntoBytes, Clone, Copy, Debug)]
+#[repr(u16)]
+enum ElfType {
+    None,
+    Relocatable,
+    Executable,
+    SharedObject,
+    Core,
+    LoOS = 0xfe00,
+    HiOS = 0xfeff,
+    LoProc = 0xff00,
+    HiProc = 0xffff,
+}
+
+#[derive(Immutable, IntoBytes, Clone, Copy, Debug)]
+#[repr(u8)]
+enum ElfClass {
+    None,
+    Elf32,
+    Elf64,
+}
+
+#[derive(Immutable, IntoBytes, Clone, Copy, Debug)]
+#[repr(u8)]
+enum ElfDataEncoding {
+    Invalid,
+    LittleEndian,
+    BigEndian,
+}
+
+#[derive(Immutable, IntoBytes, Clone, Copy, Debug)]
+#[repr(u8)]
+enum ElfOsAbi {
+    None,
+    HpUx,
+    NetBsd,
+    Linux,
+    SunSolaris,
+    Aix,
+    Irix,
+    FreeBsd,
+    Tru64Unix,
+    NovellModesto,
+    OpenBsd,
+    OpenVms,
+    HpNonStopKernel,
+}
+
 // https://refspecs.linuxfoundation.org/elf/gabi4+/ch4.eheader.html
-#[derive(FromBytes, Immutable, IntoBytes, Clone, Copy, Debug)]
+#[derive(Immutable, IntoBytes, Clone, Copy, Debug)]
 #[repr(C, packed)]
 struct ElfHeader {
     magic: [u8; 4],
-    class: u8,
-    data: u8,       // endianness
-    id_version: u8, //
-    os_abi: u8,
+    class: ElfClass,
+    data_encoding: ElfDataEncoding,
+    header_version: u8,
+    os_abi: ElfOsAbi,
     abi_version: u8,
     _res: [u8; 7],
-    elf_type: u16,
+    // the above is aka the ELF ID
+    elf_type: ElfType,
     machine: u16,
     version: u32,
     entry: u32,
@@ -112,13 +162,13 @@ impl ElfHeader {
         // NOTE: Many things are hardcoded here.
         Self {
             magic: ELF_MAGIC,
-            class: 1,      // 32-bit
-            data: 1,       // little endian
-            id_version: 1, // fixed
-            os_abi: 0,
+            class: ElfClass::Elf32,
+            data_encoding: ElfDataEncoding::LittleEndian,
+            header_version: 1, // fixed
+            os_abi: ElfOsAbi::None,
             abi_version: 0,
             _res: [0, 0, 0, 0, 0, 0, 0],
-            elf_type: 0x2, // executable
+            elf_type: ElfType::Executable,
             machine,
             version: 1,
             entry,
@@ -419,7 +469,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         let entry: u32 = aout.entry_point.into();
 
         // TODO: calculate
-        let program_header_entry_count = 4;
+        let program_header_entry_count = 3;
         // TODO: calculate
         let section_header_entry_count = 6;
 
@@ -444,18 +494,6 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
 
         // ----------- program headers
         let mut program_headers: Vec<ElfProgramHeader> = vec![];
-
-        let ph = ElfProgramHeader {
-            program_type: ElfProgramType::Null,
-            offset: 0,
-            virtual_addr: 0,
-            physical_addr: 0,
-            file_size: 0,
-            memory_size: 0,
-            flags: 0,
-            align: 0,
-        };
-        program_headers.push(ph);
 
         const PH_FLAG_READ: u32 = 1 << 2;
         const PH_FLAG_WRITE: u32 = 1 << 1;

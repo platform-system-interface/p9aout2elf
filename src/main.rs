@@ -347,6 +347,70 @@ fn aout_symbol_type(s: &AoutSymbol) -> AoutSymbolType {
     }
 }
 
+fn aout_syms_to_elf(aout_syms: Vec<AoutSymbol>) -> (Vec<ElfSymbolTableEntry>, Vec<u8>) {
+    const SYM_LOCAL: u8 = 0 << 4;
+    const SYM_GLOBAL: u8 = 1 << 4;
+
+    // NOTE: For now, text symbols only.
+    let t_syms = aout_syms[1..].iter().filter(|s| {
+        let t = s.get_type();
+        t == AoutSymbolType::TextSegment || t == AoutSymbolType::StaticTextSegment
+    });
+    let t_syms: Vec<&AoutSymbol> = t_syms.collect();
+
+    // string table
+    let f = [0u8].as_bytes();
+    let mut sym_str_tab = f.to_vec();
+
+    let mut elf_sym_tab: Vec<ElfSymbolTableEntry> = vec![];
+    // first is a 0-byte
+    let mut name_offset: u32 = 1;
+
+    // first is the undefined symbol by convention
+    let e = ElfSymbolTableEntry {
+        name_offset: 0,
+        value: 0,
+        size: 0,
+        info: 0,
+        other: 0,
+        section_index: 0,
+    };
+    elf_sym_tab.push(e);
+
+    // https://docs.oracle.com/cd/E23824_01/html/819-0690/chapter6-79797.html
+    // > In executable and shared object files, st_value holds a virtual address.
+
+    for s in t_syms.windows(2) {
+        // symbol name
+        let curr_name = s[0].name;
+        sym_str_tab.extend_from_slice(curr_name.as_bytes());
+        sym_str_tab.extend_from_slice(f);
+
+        // symbol
+        let curr_value: u32 = s[0].header.value.into();
+        let next_value: u32 = s[1].header.value.into();
+        let size = next_value - curr_value;
+        // TODO
+        let value = curr_value;
+        let e = ElfSymbolTableEntry {
+            name_offset,
+            value,
+            size,
+            info: SYM_LOCAL | 2, // global/function
+            other: 0,
+            section_index: 1,
+        };
+        elf_sym_tab.push(e);
+
+        // account for 0-byte
+        name_offset += curr_name.len() as u32 + 1;
+    }
+    // TODO: add last symbol; what is the size?
+    // NOTE: First symbol is etext; do we need to work with that?
+
+    (elf_sym_tab, sym_str_tab)
+}
+
 const VIRTUAL_BASE: u32 = 0x8000_0000;
 
 // TODO: Something with the memory sizes is strange.
@@ -369,6 +433,15 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         let d_offset = t_offset + ts as usize;
         let s_offset = d_offset + ds as usize;
 
+        // the offset in the ELF file, needed to calculate other offsets
+        let main_offset = (ELF_HEADER_SIZE
+            + program_header_entry_count * ELF_PROGRAM_HEADER_SIZE
+            + section_header_entry_count * ELF_SECTION_HEADER_SIZE
+            + PAD_SIZE) as u32;
+
+        // we will reappend this later
+        let data = &d[t_offset..];
+
         // ----------- program headers
         let mut program_headers: Vec<ElfProgramHeader> = vec![];
 
@@ -389,16 +462,11 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         const PH_FLAG_EXEC: u32 = 1 << 0;
 
         // text segment
-        let main_offset = (ELF_HEADER_SIZE
-            + program_header_entry_count * ELF_PROGRAM_HEADER_SIZE
-            + section_header_entry_count * ELF_SECTION_HEADER_SIZE
-            + PAD_SIZE) as u32;
-
         let ph = ElfProgramHeader {
             program_type: ElfProgramType::Load,
             offset: main_offset,
-            virtual_addr: VIRTUAL_BASE,
-            physical_addr: 0,
+            virtual_addr: VIRTUAL_BASE + entry,
+            physical_addr: entry,
             file_size: ts,
             memory_size: ts,
             flags: PH_FLAG_READ | PH_FLAG_EXEC,
@@ -408,12 +476,12 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
 
         // data segment
         let offset = main_offset + ts;
-        let load_offset = align_4k(ts);
+        let data_load_addr = entry + align_4k(ts);
         let ph = ElfProgramHeader {
             program_type: ElfProgramType::Load,
             offset,
-            virtual_addr: VIRTUAL_BASE + load_offset,
-            physical_addr: load_offset,
+            virtual_addr: VIRTUAL_BASE + data_load_addr,
+            physical_addr: data_load_addr,
             file_size: ds,
             // TODO: taken from fixture; why??
             memory_size: ds + 0x0007_47e8,
@@ -422,7 +490,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         };
         program_headers.push(ph);
 
-        // symbol table
+        // retain original symbol table
         let offset = offset + ds;
         let ph = ElfProgramHeader {
             program_type: ElfProgramType::Null,
@@ -437,75 +505,9 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         };
         program_headers.push(ph);
 
-        let pad = vec![0u8; PAD_SIZE];
-        let data = &d[t_offset..];
-
-        // https://docs.oracle.com/cd/E23824_01/html/819-0690/chapter6-79797.html
-        // > In executable and shared object files, st_value holds a virtual address.
-
-        const SYM_LOCAL: u8 = 0 << 4;
-        const SYM_GLOBAL: u8 = 1 << 4;
-
-        // symbol table
         let sym_table_data = &d[s_offset..s_offset + ss as usize];
         let syms = parse_aout_symbols(sym_table_data, false);
-
-        // text symbols only
-        let t_syms = syms[1..].iter().filter(|s| {
-            let t = s.get_type();
-            t == AoutSymbolType::TextSegment || t == AoutSymbolType::StaticTextSegment
-        });
-        let t_syms: Vec<&AoutSymbol> = t_syms.collect();
-
-        // string table
-        let f = [0u8].as_bytes();
-        let mut sym_str_tab = f.to_vec();
-
-        let mut elf_sym_tab: Vec<ElfSymbolTableEntry> = vec![];
-        // first is a 0-byte
-        let mut name_offset: u32 = 1;
-
-        // first is the undefined symbol by convention
-        let e = ElfSymbolTableEntry {
-            name_offset: 0,
-            value: 0,
-            size: 0,
-            info: 0,
-            other: 0,
-            section_index: 0,
-        };
-        elf_sym_tab.push(e);
-
-        for s in t_syms.windows(2) {
-            // symbol name
-            let curr_name = s[0].name;
-            sym_str_tab.extend_from_slice(curr_name.as_bytes());
-            sym_str_tab.extend_from_slice(f);
-
-            // symbol
-            let curr_value: u32 = s[0].header.value.into();
-            let next_value: u32 = s[1].header.value.into();
-            let size = next_value - curr_value;
-            // TODO
-            let value = curr_value - VIRTUAL_BASE - entry;
-            let e = ElfSymbolTableEntry {
-                name_offset,
-                value,
-                size,
-                info: SYM_LOCAL | 2, // global/function
-                other: 0,
-                section_index: 1,
-            };
-            elf_sym_tab.push(e);
-
-            // account for 0-byte
-            name_offset += curr_name.len() as u32 + 1;
-        }
-
-        for e in &elf_sym_tab {
-            println!("{e:02x?}");
-        }
-
+        let (elf_sym_tab, sym_str_tab) = aout_syms_to_elf(syms);
         let est_b = elf_sym_tab.as_bytes();
 
         // section header string table
@@ -541,13 +543,16 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
             entry_size: 0,
         };
         section_headers.push(sh);
+
+        // --- text (code) and data
+
         // .text
-        let offset = main_offset + entry;
+        let offset = main_offset;
         let sh = ElfSectionHeader {
             name: 1,
             section_type: ElfSectionType::ProgBits,
             flags: SH_FLAG_ALLOC | SH_FLAG_EXEC,
-            addr: 0,
+            addr: VIRTUAL_BASE + entry,
             offset,
             size: ts,
             link: 1,
@@ -557,12 +562,12 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         };
         section_headers.push(sh);
         // .data
-        let offset = main_offset + ts;
+        let offset = offset + ts;
         let sh = ElfSectionHeader {
             name: 7,
             section_type: ElfSectionType::ProgBits,
             flags: SH_FLAG_ALLOC | SH_FLAG_WRITE,
-            addr: load_offset,
+            addr: VIRTUAL_BASE + data_load_addr,
             offset,
             size: ds,
             link: 1,
@@ -571,6 +576,9 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
             entry_size: 0,
         };
         section_headers.push(sh);
+
+        // --- symbols and strings
+
         // .symtab
         let elf_sym_tab_count = elf_sym_tab.len() as u32;
         let size = elf_sym_tab_count * ELF_SYMBOL_TABLE_ENTRY_SIZE as u32;
@@ -621,8 +629,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         };
         section_headers.push(sh);
 
-        let phb = program_headers.as_bytes();
-        let shb = section_headers.as_bytes();
+        // -------- assemble final ELF header and data slice
 
         // TODO: parse Multiboot header, starting with magic 0x1BAD_B002
 
@@ -633,6 +640,10 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
             aout_mach_to_elf(&aout),
         );
         let eb = eh.as_bytes();
+
+        let phb = program_headers.as_bytes();
+        let shb = section_headers.as_bytes();
+        let pad = vec![0u8; PAD_SIZE];
 
         Ok([eb, phb, shb, &pad, data, est_b, &sym_str_tab, &sh_str_tab].concat())
     } else {

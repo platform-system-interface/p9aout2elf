@@ -451,86 +451,57 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
         let syms = parse_aout_symbols(sym_table_data, false);
 
         // text symbols only
-        let t_syms = syms[1..]
-            .iter()
-            .filter(|s| {
-                let t = s.get_type();
-                t == AoutSymbolType::TextSegment || t == AoutSymbolType::StaticTextSegment
-            })
-            .take(5);
+        let t_syms = syms[1..].iter().filter(|s| {
+            let t = s.get_type();
+            t == AoutSymbolType::TextSegment || t == AoutSymbolType::StaticTextSegment
+        });
         let t_syms: Vec<&AoutSymbol> = t_syms.collect();
 
-        for s in &t_syms {
-            println!("{s}");
+        // string table
+        let f = [0u8].as_bytes();
+        let mut sym_str_tab = f.to_vec();
+
+        let mut elf_sym_tab: Vec<ElfSymbolTableEntry> = vec![];
+        // first is a 0-byte
+        let mut name_offset: u32 = 1;
+
+        // first is the undefined symbol by convention
+        let e = ElfSymbolTableEntry {
+            name_offset: 0,
+            value: 0,
+            size: 0,
+            info: 0,
+            other: 0,
+            section_index: 0,
+        };
+        elf_sym_tab.push(e);
+
+        for s in t_syms.windows(2) {
+            // symbol name
+            let curr_name = s[0].name;
+            sym_str_tab.extend_from_slice(curr_name.as_bytes());
+            sym_str_tab.extend_from_slice(f);
+
+            // symbol
+            let curr_value: u32 = s[0].header.value.into();
+            let next_value: u32 = s[1].header.value.into();
+            let size = next_value - curr_value;
+            // TODO
+            let value = curr_value - VIRTUAL_BASE - entry;
+            let e = ElfSymbolTableEntry {
+                name_offset,
+                value,
+                size,
+                info: SYM_LOCAL | 2, // global/function
+                other: 0,
+                section_index: 1,
+            };
+            elf_sym_tab.push(e);
+
+            // account for 0-byte
+            name_offset += curr_name.len() as u32 + 1;
         }
 
-        // string table
-        // TODO
-        let sym_str_tab = {
-            let f = [0u8].as_bytes();
-            let a = t_syms[0].name.as_bytes();
-            println!("{a:02x?}");
-            let b = t_syms[1].name.as_bytes();
-            let c = t_syms[2].name.as_bytes();
-            [f, a, f, b, f, c, f].concat()
-        };
-        let elf_sym_tab = {
-            let mut t: Vec<ElfSymbolTableEntry> = vec![];
-
-            // first is the undefined symbol by convention
-            let e = ElfSymbolTableEntry {
-                name_offset: 0,
-                value: 0,
-                size: 0,
-                info: 0,
-                other: 0,
-                section_index: 0,
-            };
-            t.push(e);
-
-            let value: u32 = t_syms[0].header.value.into();
-            let value_next: u32 = t_syms[1].header.value.into();
-            let name_offset: u32 = 1;
-            let e = ElfSymbolTableEntry {
-                name_offset,
-                value: value - VIRTUAL_BASE - entry,
-                size: value_next - value,
-                info: SYM_LOCAL | 2, // global/function
-                other: 0,
-                section_index: 1,
-            };
-            t.push(e);
-
-            let value: u32 = t_syms[1].header.value.into();
-            let value_next: u32 = t_syms[2].header.value.into();
-            let n = t_syms[0].name;
-            let name_offset = name_offset + n.len() as u32 + 1;
-            let e = ElfSymbolTableEntry {
-                name_offset,
-                value: value - VIRTUAL_BASE - entry,
-                size: value_next - value,
-                info: SYM_LOCAL | 2, // global/function
-                other: 0,
-                section_index: 1,
-            };
-            t.push(e);
-
-            let value: u32 = t_syms[3].header.value.into();
-            let value_next: u32 = t_syms[4].header.value.into();
-            let n = t_syms[1].name;
-            let name_offset = name_offset + n.len() as u32 + 1;
-            let e = ElfSymbolTableEntry {
-                name_offset,
-                value: value - VIRTUAL_BASE - entry,
-                size: value_next - value,
-                info: SYM_LOCAL | 2, // global/function
-                other: 0,
-                section_index: 1,
-            };
-            t.push(e);
-
-            t
-        };
         for e in &elf_sym_tab {
             println!("{e:02x?}");
         }

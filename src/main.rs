@@ -757,6 +757,13 @@ fn parse_aout_symbols(st: &[u8], dump: bool) -> Vec<AoutSymbol> {
     syms
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum MachineArch {
+    Amd64,
+    Riscv64,
+    Unknown,
+}
+
 fn main() -> std::io::Result<()> {
     let cmd = Cli::parse().cmd;
     // Default to log level "info". Otherwise, you get no "regular" logs.
@@ -789,10 +796,24 @@ fn main() -> std::io::Result<()> {
             }
 
             if let Ok((aout, _)) = Aout::read_from_prefix(&d) {
-                let arch = match aout.magic {
-                    0x978a_0000 => "amd64",
-                    _ => "unknown",
+                let m = aout.magic;
+                let arch = match m {
+                    0x978a_0000 => MachineArch::Amd64,
+                    0x178e_0000 => MachineArch::Riscv64,
+                    _ => MachineArch::Unknown,
                 };
+
+                if arch == MachineArch::Unknown {
+                    println!("a.out not recognized or unsupported architecture: {m:08x}");
+                    return Ok(());
+                }
+
+                println!("Architecture: {arch:?}");
+
+                if arch == MachineArch::Riscv64 {
+                    println!("architecture not yet supported, sorry!");
+                    return Ok(());
+                }
 
                 let ts: u32 = aout.text_size.into();
                 let ds: u32 = aout.data_size.into();
@@ -813,8 +834,6 @@ fn main() -> std::io::Result<()> {
                 let epd = &d[e_offset..e_offset + 16];
                 let dd = &d[d_offset..d_offset + 16];
                 let std = &d[st_offset..st_offset + 16];
-
-                println!("Architecture: {arch}");
 
                 println!("Code size: {ts:08x}");
                 let x = if debug {

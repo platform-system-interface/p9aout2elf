@@ -722,7 +722,7 @@ fn parse_sym(st: &[u8]) -> AoutSymbol {
     if let Ok((header, _)) = AoutSymbolHeader::read_from_prefix(st) {
         let max_len = 0x80.min(st.len() - SYM_HEADER_SIZE);
         let s = &st[SYM_HEADER_SIZE..SYM_HEADER_SIZE + max_len];
-        let namex = CStr::from_bytes_until_nul(s).unwrap();
+        let namex = CStr::from_bytes_until_nul(s).unwrap_or(c"");
         let name = namex.to_str().unwrap_or("[noname]");
 
         AoutSymbol { header, name }
@@ -790,6 +790,8 @@ fn main() -> std::io::Result<()> {
             println!("File: {file_name}");
             let d = fs::read(file_name).unwrap();
 
+            // TODO: parse Multiboot header, starting with magic 0x1BAD_B002
+
             if let Ok(goblin::Object::Elf(elf)) = goblin::Object::parse(&d) {
                 println!("This is an ELF: {:#02x?}", &elf);
                 return Ok(());
@@ -810,15 +812,13 @@ fn main() -> std::io::Result<()> {
 
                 println!("Architecture: {arch:?}");
 
-                if arch == MachineArch::Riscv64 {
-                    println!("architecture not yet supported, sorry!");
-                    return Ok(());
-                }
-
                 let ts: u32 = aout.text_size.into();
                 let ds: u32 = aout.data_size.into();
                 let sts: u32 = aout.symbol_table_size.into();
                 let ep: u32 = aout.entry_point.into();
+
+                println!("Entry point:  {ep:08x}");
+                println!();
 
                 // The sections are in a fixed order:
                 // - text (code)
@@ -826,48 +826,37 @@ fn main() -> std::io::Result<()> {
                 // - symbols
                 // - bss?
                 let t_offset = AOUT_HEADER_SIZE + PAD_EXTRA_SIZE;
-                let e_offset = t_offset + ep as usize;
                 let d_offset = t_offset + ts as usize;
                 let st_offset = d_offset + ds as usize;
 
-                let pd = &d[t_offset..t_offset + 16];
-                let epd = &d[e_offset..e_offset + 16];
-                let dd = &d[d_offset..d_offset + 16];
-                let std = &d[st_offset..st_offset + 16];
-
-                println!("Code size: {ts:08x}");
                 let x = if debug {
+                    let pd = &d[t_offset..t_offset + 16];
                     format!(" {pd:02x?}")
                 } else {
                     "".to_string()
                 };
-                println!("Code start @ {t_offset:08x}{x}");
-                let x = if debug {
-                    format!(" {epd:02x?}")
-                } else {
-                    "".to_string()
-                };
-                println!("     Entry @ {ep:08x}{x}");
+                println!("Code:    {ts:08x} bytes @ {t_offset:08x}{x}");
 
-                println!("Data size: {ds:08x}");
                 let x = if debug {
+                    let dd = &d[d_offset..d_offset + 16];
                     format!(" {dd:02x?}")
                 } else {
                     "".to_string()
                 };
-                println!("      Data @ {d_offset:08x}{x}");
+                println!("Data:    {ds:08x} bytes @ {d_offset:08x}{x}");
 
-                println!("Symbol table size: {sts:08x}");
                 let x = if debug {
+                    let std = &d[st_offset..st_offset + 16];
                     format!(" {std:02x?}")
                 } else {
                     "".to_string()
                 };
-                println!("Symbol table @ {st_offset:08x}{x}");
+                println!("Symbols: {sts:08x} bytes @ {st_offset:08x}{x}");
 
+                println!();
                 let sym_table_data = &d[st_offset..st_offset + sts as usize];
                 let syms = parse_aout_symbols(sym_table_data, verbose);
-                println!("{} symbols found", syms.len());
+                println!("{} symbols read", syms.len());
             }
         }
     }

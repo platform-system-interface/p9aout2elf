@@ -660,11 +660,12 @@ fn aout_syms_to_elf(
     const SYM_FUNCTION: u8 = 2;
 
     // NOTE: For now, text symbols only.
-    let t_syms = aout_syms[1..].iter().filter(|s| {
+    let mut t_syms = aout_syms.iter().filter(|s| {
         let t = s.get_type();
         t == AoutSymbolType::TextSegment || t == AoutSymbolType::StaticTextSegment
     });
-    let t_syms: Vec<&AoutSymbol> = t_syms.collect();
+    let mut t_syms: Vec<&AoutSymbol> = t_syms.collect();
+    t_syms.sort_by_key(|e| e.header.value);
 
     // string table
     let f = [0u8].as_bytes();
@@ -736,8 +737,6 @@ fn aout_syms_to_elf(
         // account for 0-byte
         name_offset += curr_name.len() as u32 + 1;
     }
-    // TODO: add last symbol; what is the size?
-    // NOTE: First symbol is etext; do we need to work with that?
 
     (elf_sym_tab, sym_str_tab)
 }

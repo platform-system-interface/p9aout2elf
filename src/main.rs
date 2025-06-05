@@ -654,8 +654,10 @@ fn aout_syms_to_elf(
     aout_syms: Vec<AoutSymbol>,
     is_64bit: bool,
 ) -> (Vec<ElfSymbolTableEntry>, Vec<u8>) {
+    // TODO: enums, ElfInfo struct
     const SYM_LOCAL: u8 = 0 << 4;
     const SYM_GLOBAL: u8 = 1 << 4;
+    const SYM_FUNCTION: u8 = 2;
 
     // NOTE: For now, text symbols only.
     let t_syms = aout_syms[1..].iter().filter(|s| {
@@ -715,7 +717,7 @@ fn aout_syms_to_elf(
                 name_offset,
                 value: value as u64,
                 size: size as u64,
-                info: SYM_LOCAL | 2, // global/function
+                info: SYM_LOCAL | SYM_FUNCTION,
                 other: 0,
                 section_index: 1,
             };
@@ -725,7 +727,7 @@ fn aout_syms_to_elf(
                 name_offset,
                 value,
                 size,
-                info: SYM_LOCAL | 2, // global/function
+                info: SYM_LOCAL | SYM_FUNCTION,
                 other: 0,
                 section_index: 1,
             };

@@ -710,7 +710,6 @@ fn aout_syms_to_elf(
         let curr_value: u32 = s[0].header.value.into();
         let next_value: u32 = s[1].header.value.into();
         let size = next_value - curr_value;
-        // TODO
         let value = curr_value;
         if is_64bit {
             let e = Elf64SymbolTableEntry {
@@ -848,7 +847,6 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
                     virtual_addr: 0,
                     physical_addr: 0,
                     file_size: ss as u64,
-                    // TODO: ?!
                     memory_size: ss as u64,
                     flags: PH_FLAG_READ,
                     align: 4,
@@ -876,8 +874,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
                     virtual_addr: virtual_base as u32 + data_load_addr,
                     physical_addr: data_load_addr,
                     file_size: ds,
-                    // TODO: taken from fixture; why??
-                    memory_size: ds + 0x0007_47e8,
+                    memory_size: ds,
                     flags: PH_FLAG_READ | PH_FLAG_WRITE,
                     align: 4 * 1024,
                 };
@@ -891,8 +888,7 @@ fn aout_to_elf(d: &[u8]) -> Result<Vec<u8>, String> {
                     virtual_addr: 0,
                     physical_addr: 0,
                     file_size: ss,
-                    // TODO: ?!
-                    memory_size: ss - 0x0004_a172,
+                    memory_size: ss,
                     flags: PH_FLAG_READ,
                     align: 4,
                 };
